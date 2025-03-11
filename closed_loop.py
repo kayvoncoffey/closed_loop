@@ -192,10 +192,19 @@ for idx in range(L):
     system.t_next(tau_mpc[0])
     G_t.append(system.G_t)
 # Append result for this simulation
-print(G_t)
-print(tau)
+plt.subplot(2, 1, 1)
+plt.plot(np.arange(L), G_t, '--', label="Glucose Level")
+plt.ylabel(r"G_t")
+plt.legend()
+plt.grid()
 
-plt.plot(range(L),G_t)
-plt.plot(range(L),tau)
+plt.subplot(2, 1, 2)
+plt.plot(np.arange(L), tau, '--', label="Insulin Infusion")
+plt.ylabel(r"I_u")
+plt.xlabel("Time")
+plt.legend()
+plt.grid()
 plt.show()
+
+
 

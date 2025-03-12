@@ -98,8 +98,8 @@ class system_model:
         self.G_t += dG_t * self.time_scale
         #update insulin level list
         # dI_t = self.iLoad(self.I_u_list)-self.Vmax*self.I_t_list[0]/(self.Km+self.I_t_list[0])
-        dI_t = self.iLoad(self.I_u_list)-0.06*self.I_t_list[0]
-        self.I_t_list = np.insert(self.I_t_list, 0, self.time_scale * dI_t+self.I_t_list[0])[:-1]
+        dI_t = self.iLoad(self.I_u_list)-0.06*self.I_t_list[0]*self.time_scale
+        self.I_t_list = np.insert(self.I_t_list, 0,  dI_t+self.I_t_list[0])[:-1]
         # [dI_t+self.I_t_list[0]]+self.I_t_list[:-1]
         #update injected insulin level
         self.I_u_list = np.insert(self.I_u_list,0,tau_next)[:-1]
@@ -115,9 +115,9 @@ class system_model:
             G_t = G_t + dG_t * self.time_scale
             # dI_t =I_load[n_Idose_delays-1]+BETA*f5(G_tau[n_G_delays-1],time_scale)-Vmax*I_t/(Km+I_t)
             # dI_t = self.iLoad(I_u_list)-self.Vmax*I_t/(self.Km+I_t)
-            dI_t = self.iLoad(I_u_list)-0.06*I_t
+            dI_t = self.iLoad(I_u_list)-self.time_scale*0.06*I_t
             
-            I_t_list = np.insert(I_t_list, 0, self.time_scale*dI_t+I_t_list[0])[:-1]
+            I_t_list = np.insert(I_t_list, 0, dI_t+I_t_list[0])[:-1]
             
             I_u_list = np.insert(I_u_list, 0,tau[i])[:-1]
             
@@ -222,6 +222,7 @@ for idx in range(N_iterations):
     
     # ---------- SIMULATION LOOP  ----------
     system.t_next(tau_mpc[0])
+    
     if system.meal:
         bfast_start = int(floor(2*60/timescale)) #
         bfast_end = int(floor(2.5*60/timescale))

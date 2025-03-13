@@ -97,8 +97,8 @@ class system_model:
         dG_t = self.f1( self.iTau(self.I_t_list))-self.f2(self.G_t)-self.GAMMA*(1+self.s*(self.m-self.mb))*self.f3(self.G_t)*self.f4(self.I_t_list[0])
         self.G_t += dG_t * self.time_scale
         #update insulin level list
-        # dI_t = self.iLoad(self.I_u_list)-self.Vmax*self.I_t_list[0]/(self.Km+self.I_t_list[0])
-        dI_t = self.iLoad(self.I_u_list)-0.06*self.I_t_list[0]*self.time_scale
+        dI_t = self.iLoad(self.I_u_list)-self.time_scale*self.Vmax*self.I_t_list[0]/(self.Km+self.I_t_list[0])
+        # dI_t = self.iLoad(self.I_u_list)-0.06*self.I_t_list[0]*self.time_scale
         self.I_t_list = np.insert(self.I_t_list, 0,  dI_t+self.I_t_list[0])[:-1]
         # [dI_t+self.I_t_list[0]]+self.I_t_list[:-1]
         #update injected insulin level
@@ -114,8 +114,8 @@ class system_model:
             dG_t = self.f1( self.iTau(I_t_list))-self.f2(G_t)-self.GAMMA*(1+self.s*(self.m-self.mb))*self.f3(G_t)*self.f4(I_t)
             G_t = G_t + dG_t * self.time_scale
             # dI_t =I_load[n_Idose_delays-1]+BETA*f5(G_tau[n_G_delays-1],time_scale)-Vmax*I_t/(Km+I_t)
-            # dI_t = self.iLoad(I_u_list)-self.Vmax*I_t/(self.Km+I_t)
-            dI_t = self.iLoad(I_u_list)-self.time_scale*0.06*I_t
+            dI_t = self.iLoad(I_u_list)-self.time_scale*self.Vmax*I_t/(self.Km+I_t)
+            # dI_t = self.iLoad(I_u_list)-self.time_scale*0.06*I_t
             
             I_t_list = np.insert(I_t_list, 0, dI_t+I_t_list[0])[:-1]
             
@@ -128,7 +128,7 @@ class system_model:
         return tau-np.array(tau)
 # Step of the system
 
-def l_cost(tau, system_model, g, target=105, safe_high=110, safe_low=90, alert_low=60, alert_high=150):
+def l_cost(tau, system_model, g, target=105, safe_high=120, safe_low=90, alert_low=60, alert_high=150):
     gt = system_model.predicted_g(tau)
     l_safe_high = np.square(gt-target*g)*(gt>safe_high*g)
     l_safe_low = np.square(gt-target*g)*(gt<safe_low*g)
@@ -184,7 +184,6 @@ def mpc_cost(tau, system_model,g, G_t_ref=100):
 # ---------- SIMULATION INITIALISATION ----------
 timescale = 5
 HOURS = 12 #7am to 9pm
-time_scale = 5
 N_iterations = int(floor(HOURS*60/timescale))
 
 # n_G_delays = int(floor(5/timescale)) removed for typeI
@@ -196,7 +195,7 @@ g=45
 tau = np.zeros(N_iterations)
 # ---------- CONTROL SYSTEM CALIBRATION ----------
 # Model predictive control horizon
-N = 20
+N = 12
 tau_ini = np.zeros(N)
 # Array for values of theta and tau for each simulation
 

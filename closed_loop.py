@@ -8,6 +8,7 @@ import numpy as np
 from scipy.optimize import minimize, LinearConstraint, NonlinearConstraint
 import matplotlib.pyplot as plt
 from math import floor
+from sklearn.svm import OneClassSVM
 
 class system_model:
     def __init__(self,time_scale,N,G_t,I_t_list,n_I_delays,I_u_list,n_Idose_delays, GAMMA):
@@ -106,14 +107,13 @@ class system_model:
         dI_t = self.iLoad(self.I_u_list)-self.time_scale*self.Vmax*self.I_t_list[0]/(self.Km+self.I_t_list[0])
         dG_t = self.f1( self.iTau(self.I_t_list))-self.f2(self.G_t)-GAMMA*(1+self.s*(self.m-self.mb))*self.f3(self.G_t)*self.f4(self.I_t_list[0])
         
+        self.pred_next_g = self.G_t + self.f1( self.iTau(self.I_t_list))-self.f2(self.G_t)-self.GAMMA*(1+self.s*(self.m-self.mb))*self.f3(self.G_t)*self.f4(self.I_t_list[0])
         
         self.I_t_list = np.insert(self.I_t_list, 0,  dI_t+self.I_t_list[0])[:-1]
         self.I_u_list = np.insert(self.I_u_list,0,tau[0])[:-1]
         
-        
         self.G_t += dG_t * self.time_scale
-        self.pred_next_g = self.G_t 
-
+        
     def predicted_g(self,tau,extended_len=0):
         G_N = np.zeros(self.N+extended_len)
         I_t_list = self.I_t_list
@@ -147,7 +147,7 @@ def l_cost(tau, system_model, g, target=105, safe_high=120, safe_low=90, alert_l
     l_alert_low = np.square(gt-target*g)*( gt<alert_low*g)
     return np.sum(l_safe_high+l_safe_low+l_alert_high+l_alert_low)
 
-def max_cost(tau, system_model,g, G_t_ref=105):
+def max_cost(tau, system_model,g, G_t_max=140):
     G_t_N = system_model.predicted_g(tau)
     return np.max(np.square(np.array(G_t_N)-G_t_ref*g))
 
@@ -159,18 +159,19 @@ def mpc_cost(tau, system_model,g, G_t_ref=105):
 
 def m_cost(tau, system_model,g, G_t_ref=105, G_low=70):
     G_t_N = system_model.predicted_g(tau)-system.calib
-    mse = np.sum(np.square(np.array(G_t_N)-G_t_ref*g))/len(tau)
-    max = np.max(np.square(np.array(G_t_N)-G_t_ref*g))
-    G_t_N_extended = system_model.predicted_g(tau,12)-system.calib
-    extended_max = np.max(np.square(np.array(G_t_N_extended)-G_t_ref*g))
-    extended_low = np.sum(np.square(np.array(G_t_N_extended)-G_t_ref*g)*(G_t_N_extended<G_low*g))
-    return mse
+    mse = np.mean(np.square(np.array(G_t_N)-G_t_ref*g))
+    # max = np.max(np.square(np.array(G_t_N)-G_t_ref*g))
+    # G_t_N_extended = system_model.predicted_g(tau,12)-system.calib
+    # extended_max = np.max(np.square(np.array(G_t_N_extended)-G_t_ref*g))
+    # extended_low = np.sum(np.square(np.array(G_t_N_extended)-G_t_ref*g)*(G_t_N_extended<G_low*g))
+    safe_penalty = np.sum((G_t_N > 140*g) | (G_t_N < 70*g)) * 1e4
+    return mse+safe_penalty
 
 def solve_mpc(tau_ini,N,system_model,g,G_t_ref):
 
     # Linear constraints on the rate of change of tau: -delta_tau_max <= tau[i+1] - tau[i] <= delta_tau_max for all i in the N - 1
     # Implemented using LinearConstraint as -delta_tau_max <= delta_tau_matrix * tau <= delta_tau_max
-    delta_tau_max = 100
+    delta_tau_max = 200
     tau_max = 300
     delta_tau_matrix = np.eye(N) - np.eye(N, k=1)
     constraint1 = LinearConstraint(delta_tau_matrix, -delta_tau_max, delta_tau_max)
@@ -235,7 +236,8 @@ G_t_ref=100
 G_t = np.zeros(N_iterations)
 G_predicted = np.zeros(N_iterations)
 calib = np.zeros(N_iterations)
-
+calib_anamoly =np.zeros(N_iterations)
+moving_average = np.empty(0)
 compensation = 0
 
 bfast_start = int(floor(2*60/timescale)) #
@@ -245,6 +247,17 @@ lunch_end = int(floor(6*60/timescale))
 dinner_start = int(floor(7.5*60/timescale))
 dinner_end = int(floor(8*60/timescale))
 
+
+model = OneClassSVM(nu=0.1, kernel="rbf", gamma=0.1)
+# Define the window size for the moving average
+window_size = 5
+meal_compensation = 200
+threshold = 500
+
+compensation_times = 0
+compensation_times_thrd = 2
+compensation_gap = 0
+compensation_gap_sleep = 12
 for idx in range(N_iterations):
     tau_mpc = solve_mpc(tau_ini,N,system,g,G_t_ref)
     # Use first element of control input optimal solution
@@ -258,8 +271,35 @@ for idx in range(N_iterations):
     #     tau_mpc[0] = 0
     # if system.G_t < 4.5*g*18:
     #     tau_mpc[0] = 0
-    tau[idx] = tau_mpc[0]
     
+    
+    #manual manipulation
+    # if idx > 10 and idx -window_size <= 10:
+    moving_average = np.append(moving_average, system.calib)
+    if idx -window_size > 10:
+            
+            if compensation_times < compensation_times_thrd:
+                if system.calib - np.mean(moving_average) > threshold:
+
+                    calib_anamoly[idx] = 1
+                    tau_mpc[0] += meal_compensation
+                    compensation_times += 1
+            elif compensation_times > 0:
+                if compensation_gap < compensation_gap_sleep:
+                    compensation_gap += 1
+                else:
+                    compensation_times = 0
+                    compensation_gap = 0
+                
+
+            
+        # elif system.calib - np.mean(moving_average) > -threshold:
+        #     moving_average = np.append(moving_average, system.calib)
+    
+    
+    
+    
+    tau[idx] = tau_mpc[0]
     # ---------- SIMULATION LOOP  ----------
     G_predicted[idx] = system.predicted_g(tau_mpc)[0]
     system.t_next(tau_mpc)
@@ -273,6 +313,11 @@ for idx in range(N_iterations):
     
     calib[idx] = system.calib
     
+   
+
+        
+    
+
     
 # Append result for this simulation
 plt.subplot(2, 1, 1)
@@ -291,7 +336,7 @@ if system.meal:
     plt.axvline(bfast_end*timescale/60,color='orange',linestyle='--',linewidth=0.75)
     plt.axvline(lunch_end*timescale/60,color='orange',linestyle='--',linewidth=0.75)
     plt.axvline(dinner_end*timescale/60,color='orange',linestyle='--',linewidth=0.75)
-
+    
 
 plt.subplot(2, 1, 2)
 plt.plot(np.arange(N_iterations)*timescale/60, tau, linewidth=0,color='r',marker='.',label="Insulin Infusion")
@@ -307,7 +352,9 @@ if system.meal:
     plt.axvline(bfast_end*timescale/60,color='orange',linestyle='--',linewidth=0.75)
     plt.axvline(lunch_end*timescale/60,color='orange',linestyle='--',linewidth=0.75)
     plt.axvline(dinner_end*timescale/60,color='orange',linestyle='--',linewidth=0.75)
-
+    plt.text(bfast_start*timescale/60+0.1, 110, 'Breakfast', rotation=90)
+    plt.text(lunch_start*timescale/60+0.1, 110, 'Lunch', rotation=90)
+    plt.text(dinner_start*timescale/60+0.1, 110, 'Dinner', rotation=90)
 plt.show()
 
 

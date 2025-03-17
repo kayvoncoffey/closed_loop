@@ -15,14 +15,12 @@ class system_model:
         self.time_scale = time_scale
         self.N = N
         self.G_t = G_t
-        self.G_t_past = G_t
         self.I_t_list = I_t_list
         self.n_I_delays = n_I_delays
         self.I_u_list = I_u_list
         self.n_Idose_delays = n_Idose_delays
         self.GAMMA = GAMMA
-        self.pred_next_g = G_t
-        self.calib = 0
+        self.pred_next_g = 0
         
         self.BETA = 0
         self.Km = 2300
@@ -95,46 +93,44 @@ class system_model:
     def iTau(self,I_t_list):
         return I_t_list[self.n_I_delays-1]
     
-    def t_next(self,tau):
+    def t_next(self,tau_next):
         #update current glucose level g_t
-        self.calib = self.G_t - self.pred_next_g
-        self.G_t_past = self.G_t
-         # dI_t = self.iLoad(self.I_u_list)-0.06*self.I_t_list[0]*self.time_scale
-         # [dI_t+self.I_t_list[0]]+self.I_t_list[:-1]
-        #update injected insulin level
-        GAMMA = (np.random.rand()-self.GAMMA)/self.GAMMA*0.2+self.GAMMA
-        dI_t = self.iLoad(self.I_u_list)-self.time_scale*self.Vmax*self.I_t_list[0]/(self.Km+self.I_t_list[0])
-        dG_t = self.f1( self.iTau(self.I_t_list))-self.f2(self.G_t)-GAMMA*(1+self.s*(self.m-self.mb))*self.f3(self.G_t)*self.f4(self.I_t_list[0])
-        
-        
-        self.I_t_list = np.insert(self.I_t_list, 0,  dI_t+self.I_t_list[0])[:-1]
-        self.I_u_list = np.insert(self.I_u_list,0,tau[0])[:-1]
-        
-        
+        dG_t = self.f1( self.iTau(self.I_t_list))-self.f2(self.G_t)-self.GAMMA*(1+self.s*(self.m-self.mb))*self.f3(self.G_t)*self.f4(self.I_t_list[0])
         self.G_t += dG_t * self.time_scale
-        self.pred_next_g = self.G_t 
-
-    def predicted_g(self,tau,extended_len=0):
-        G_N = np.zeros(self.N+extended_len)
+        #update insulin level list
+        dI_t = self.iLoad(self.I_u_list)-self.time_scale*self.Vmax*self.I_t_list[0]/(self.Km+self.I_t_list[0])
+        # dI_t = self.iLoad(self.I_u_list)-0.06*self.I_t_list[0]*self.time_scale
+        self.I_t_list = np.insert(self.I_t_list, 0,  dI_t+self.I_t_list[0])[:-1]
+        # [dI_t+self.I_t_list[0]]+self.I_t_list[:-1]
+        #update injected insulin level
+        self.I_u_list = np.insert(self.I_u_list,0,tau_next)[:-1]
+        
+    def predicted_g(self,tau):
+        # G_N = np.zeros(self.N)
+        G_N = []
         I_t_list = self.I_t_list
         G_t = self.G_t
-        
         I_u_list = self.I_u_list
+        uncertainty_len = 3
+        # G_N = np.zeros(self.N*uncertainty_len)
+        uncertainty_level = 0.
         for i in range(self.N):
             I_t = I_t_list[0]
-            dG_t = self.f1( self.iTau(I_t_list))-self.f2(G_t)-self.GAMMA*(1+self.s*(self.m-self.mb))*self.f3(G_t)*self.f4(I_t)
-            
+            for j in range(uncertainty_len):
+                
+                dG_t = self.f1( self.iTau(I_t_list))-self.f2(G_t)-(self.GAMMA - (j-1)*uncertainty_level)*(1+self.s*(self.m-self.mb))*self.f3(G_t)*self.f4(I_t)
+                G_N.append(G_t + dG_t * self.time_scale)
             # dI_t =I_load[n_Idose_delays-1]+BETA*f5(G_tau[n_G_delays-1],time_scale)-Vmax*I_t/(Km+I_t)
             dI_t = self.iLoad(I_u_list)-self.time_scale*self.Vmax*I_t/(self.Km+I_t)
             # dI_t = self.iLoad(I_u_list)-self.time_scale*0.06*I_t
-            G_t = G_t + dG_t * self.time_scale
+            
             I_t_list = np.insert(I_t_list, 0, dI_t+I_t_list[0])[:-1]
             
             I_u_list = np.insert(I_u_list, 0,tau[i])[:-1]
             
-            G_N[i] = G_t + self.calib
-        
-        return G_N
+
+        self.pred_next_g = G_N[0]
+        return np.array(G_N)
     def discrete_tau(self,tau):
         return tau-np.array(tau)
 # Step of the system
@@ -147,53 +143,36 @@ def l_cost(tau, system_model, g, target=105, safe_high=120, safe_low=90, alert_l
     l_alert_low = np.square(gt-target*g)*( gt<alert_low*g)
     return np.sum(l_safe_high+l_safe_low+l_alert_high+l_alert_low)
 
-def max_cost(tau, system_model,g, G_t_ref=105):
-    G_t_N = system_model.predicted_g(tau)
-    return np.max(np.square(np.array(G_t_N)-G_t_ref*g))
 
-
-
-def mpc_cost(tau, system_model,g, G_t_ref=105):
-    G_t_N = system_model.predicted_g(tau)
-    return np.sum(np.square(np.array(G_t_N)-G_t_ref*g))/len(tau)
-
-def m_cost(tau, system_model,g, G_t_ref=105, G_low=70):
-    G_t_N = system_model.predicted_g(tau)-system.calib
-    mse = np.sum(np.square(np.array(G_t_N)-G_t_ref*g))/len(tau)
-    max = np.max(np.square(np.array(G_t_N)-G_t_ref*g))
-    G_t_N_extended = system_model.predicted_g(tau,12)-system.calib
-    extended_max = np.max(np.square(np.array(G_t_N_extended)-G_t_ref*g))
-    extended_low = np.sum(np.square(np.array(G_t_N_extended)-G_t_ref*g)*(G_t_N_extended<G_low*g))
-    return mse
 
 def solve_mpc(tau_ini,N,system_model,g,G_t_ref):
 
     # Linear constraints on the rate of change of tau: -delta_tau_max <= tau[i+1] - tau[i] <= delta_tau_max for all i in the N - 1
     # Implemented using LinearConstraint as -delta_tau_max <= delta_tau_matrix * tau <= delta_tau_max
-    delta_tau_max = 100
-    tau_max = 300
-    delta_tau_matrix = np.eye(N) - np.eye(N, k=1)
-    constraint1 = LinearConstraint(delta_tau_matrix, -delta_tau_max, delta_tau_max)
+    # delta_tau_max = 100
+    # tau_max = 100
+    # delta_tau_matrix = np.eye(N) - np.eye(N, k=1)
+    # constraint1 = LinearConstraint(delta_tau_matrix, 0, delta_tau_max)
 
     # # # We need a constraint on the rate of change of tau[0] respect to its previous value, which is tau_ini[0]
-    first_element_matrix = np.zeros([N, N])
-    first_element_matrix[0, 0] = 1
-    constraint2 = LinearConstraint(first_element_matrix, 0, tau_ini[0]+delta_tau_max)
+    # first_element_matrix = np.zeros([N, N])
+    # first_element_matrix[0, 0] = 1
+    # constraint2 = LinearConstraint(first_element_matrix, 0, tau_ini[0]+delta_tau_max)
     # # G_t_constraint = predicted_g(N,tau,G_t,I_t_list,n_I_delays,I_u_list,n_Idose_delays, GAMMA, time_scale)
     # system_model = system_model(time_scale,N,G_t,I_t_list,n_I_delays,I_u_list,n_Idose_delays, GAMMA)
     G_t_constraint = NonlinearConstraint(system_model.predicted_g, 0.0, 200*g)
     # discrete_constraint = NonlinearConstraint(system_model.discrete_tau, 0.0, 0.0)
 
     # Add constraints
-    delta_tau_constraint = [constraint1,constraint2,G_t_constraint]
+    delta_tau_constraint = [G_t_constraint]
     # delta_tau_constraint = [G_t_constraint]
     # Bounds --> -tau_max <= tau[idx] <= tau_max for idx = 0 to N-1
-    bounds = [(0, tau_max) for idx in range(N)]
+    bounds = [(0, 200) for idx in range(N)]
 
     # Starting optimisation point for theta and dtheta are the current measurements
 
     # Minimization
-    result = minimize(m_cost, tau_ini, args=(system_model, g), bounds=bounds, constraints=delta_tau_constraint)
+    result = minimize(mpc_cost, tau_ini, args=(system_model, g), bounds=bounds, constraints=delta_tau_constraint)
 
     # Extract the optimal control sequence
     tau_mpc = result.x
@@ -201,6 +180,12 @@ def solve_mpc(tau_ini,N,system_model,g,G_t_ref):
     return tau_mpc
 
 # Cost function to be minimized
+def mpc_cost(tau, system_model,g, G_t_ref=100):
+
+    # Initialise cost = 0 and states to current measured states
+    # cost = 0
+    G_t_N = system_model.predicted_g(tau)
+    return np.sum(np.square(np.array(G_t_N)-G_t_ref*g))/len(tau)
 
 
 # ---------- SIMULATION INITIALISATION ----------
@@ -209,8 +194,8 @@ HOURS = 12 #7am to 9pm
 N_iterations = int(floor(HOURS*60/timescale))
 
 # n_G_delays = int(floor(5/timescale)) removed for typeI
-n_I_delays = int(floor(15/timescale))  #tau2
-n_Idose_delays = int(floor(5/timescale)) #tau1
+n_I_delays = int(floor(15/timescale))
+n_Idose_delays = int(floor(20/timescale))
 
 g=45
 # Arrays for logging
@@ -234,44 +219,37 @@ system = system_model(timescale,N,G_t_start,I_t_record,n_I_delays,I_u_record,n_I
 G_t_ref=100
 G_t = np.zeros(N_iterations)
 G_predicted = np.zeros(N_iterations)
-calib = np.zeros(N_iterations)
 
-compensation = 0
-
-bfast_start = int(floor(2*60/timescale)) #
-bfast_end = int(floor(2.5*60/timescale))
-lunch_start = int(floor(5*60/timescale))
-lunch_end = int(floor(6*60/timescale))
-dinner_start = int(floor(7.5*60/timescale))
-dinner_end = int(floor(8*60/timescale))
-
+compensation_unit = 0
+compensation_trigger = 0.5 * 18 * 45
 for idx in range(N_iterations):
     tau_mpc = solve_mpc(tau_ini,N,system,g,G_t_ref)
     # Use first element of control input optimal solution
     
+    pred_prev = system.pred_next_g
+
     
+
+    tau_next =  max(0,tau_mpc[0] + (2*(system.G_t>pred_prev)-1)*compensation_unit*(np.abs(system.G_t-pred_prev)>compensation_trigger))
+    tau_mpc[0] = tau_next
+    tau[idx] = tau_next
     # Initial solution for next step = current solution
-    
-    if idx in (bfast_start, lunch_start, dinner_start):
-        tau_mpc[0] += compensation
-    # if (system.G_t < 4.5*g*18 and system.G_t-system.G_t_past <0) or system.G_t < 4*g*18:
-    #     tau_mpc[0] = 0
-    # if system.G_t < 4.5*g*18:
-    #     tau_mpc[0] = 0
-    tau[idx] = tau_mpc[0]
-    
-    # ---------- SIMULATION LOOP  ----------
-    G_predicted[idx] = system.predicted_g(tau_mpc)[0]
-    system.t_next(tau_mpc)
-    
     tau_ini = tau_mpc
+    G_predicted[idx] = system.predicted_g(tau_mpc)[0]
+    # ---------- SIMULATION LOOP  ----------
+    system.t_next(tau_mpc[0])
+    
     if system.meal:
+        bfast_start = int(floor(2*60/timescale)) #
+        bfast_end = int(floor(2.5*60/timescale))
+        lunch_start = int(floor(5*60/timescale))
+        lunch_end = int(floor(6*60/timescale))
+        dinner_start = int(floor(7.5*60/timescale))
+        dinner_end = int(floor(8*60/timescale))
         if (idx>=bfast_start) & (idx<=bfast_end): system.G_t += (1/(bfast_end-bfast_start))*50 *g # 300 mg/dl of glucose infused of 15 mins
         if (idx>=lunch_start) & (idx<=lunch_end): system.G_t += (1/(lunch_end-lunch_start))*100 *g # 
         if (idx>=dinner_start) & (idx<=dinner_end): system.G_t += (1/(dinner_end-dinner_start))*150 *g
     G_t[idx] = system.G_t
-    
-    calib[idx] = system.calib
     
     
 # Append result for this simulation

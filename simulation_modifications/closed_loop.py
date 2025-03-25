@@ -7,7 +7,7 @@ Created on Mon Mar 10 13:43:15 2025
 import numpy as np
 from scipy.optimize import minimize, LinearConstraint, NonlinearConstraint
 import matplotlib.pyplot as plt
-from math import floor
+from math import floor,ceil
 from sklearn.svm import OneClassSVM
 
 from scipy.stats import gamma
@@ -229,7 +229,7 @@ I_t_record = np.ones(N)*50
 
 I_u_record = np.ones(N)*50
 
-GAMMA = 0.5
+GAMMA = 0.2
 # ---------- SIMULATION ----------
 system = system_model(timescale,N,G_t_start,I_t_record,n_I_delays,I_u_record,n_Idose_delays, GAMMA)
 # Init time
@@ -337,6 +337,7 @@ for idx in range(N_iterations):
         
     
 print(sum(tau))
+print(f'ICR is 1:{int(ceil(311/sum(tau/1000)))}')
     
 # Append result for this simulation
 plt.subplot(2, 1, 1)
